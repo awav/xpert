@@ -81,7 +81,9 @@ def _norm_opts(opts: Dict) -> Dict:
 
 def _quoted_split(string: str):
     r"""
-    StackOverflow solution for splitting string with spaces ignoring the content inside quotes ' and ".
+    StackOverflow solution for splitting string with spaces ignoring the content
+    inside quotes ' and ".
+    https://stackoverflow.com/a/51560564/7788672
     """
 
     def strip_quotes(s):
