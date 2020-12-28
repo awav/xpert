@@ -143,14 +143,25 @@ class RunContext:
     def program_and_args(self, opts: Dict) -> List[str]:
         return _quoted_split(self.cmd(opts))
 
+    def output_log_file(self, opts: Dict) -> Path:
+        timestamp = int(time.time())
+        return self._filepath(f"stdout.{timestamp}.log", opts)
+
+    def error_log_file(self, opts: Dict) -> Path:
+        timestamp = int(time.time())
+        return self._filepath(f"stderr.{timestamp}.log", opts)
+
     def completed_file(self, opts: Dict) -> Path:
-        return self._status_file("completed.status", opts)
+        return self._filepath("completed.status", opts)
 
     def failed_file(self, opts: Dict) -> Path:
-        return self._status_file("failed.status", opts)
+        return self._filepath("failed.status", opts)
 
-    def _status_file(self, status: str, opts: Dict) -> Path:
-        return Path(self.uid(opts), status).resolve()
+    def _filepath(self, status: str, opts: Dict) -> Path:
+        base = Path(self.uid(opts))
+        if not base.exists():
+            base.mkdir(parents=True)
+        return Path(base, status).resolve()
 
     def is_task_completed(self, opts: Dict) -> bool:
         if self._restart:
@@ -248,24 +259,45 @@ async def run_command(ctx: RunContext, opts: Dict):
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_indices)
         env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
+    stdout_pipe = asyncio.subprocess.PIPE
+    read_pipe, write_pipe = os.pipe()
+    read_err_pipe, write_err_pipe = os.pipe()
+
     program, *args = ctx.program_and_args(opts)
     process = await asyncio.create_subprocess_exec(
         program,
         *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stdout=write_pipe,
+        stderr=write_err_pipe,
         env=env,
     )
+
+    os.close(write_pipe)
+    os.close(write_err_pipe)
+
+    tee_out = await asyncio.create_subprocess_exec(
+        "tee", "-a", ctx.output_log_file(opts), stdin=read_pipe, stdout=stdout_pipe
+    )
+    tee_err = await asyncio.create_subprocess_exec(
+        "tee", "-a", ctx.error_log_file(opts), stdin=read_err_pipe, stdout=stdout_pipe
+    )
+
+    os.close(read_pipe)
+    os.close(read_err_pipe)
 
     pid = process.pid
     sp.print_run(pid)
 
     stdout, stderr = await process.communicate()
+    await tee_out.communicate()
+    await tee_err.communicate()
+
     if process.returncode != 0:
         sp.print_failure(pid)
     else:
         sp.print_success(pid)
         completed_file = ctx.completed_file(opts)
+        # Blocking operations
         completed_file.parent.mkdir(parents=True, exist_ok=True)
         completed_file.touch()
 
