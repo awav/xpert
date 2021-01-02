@@ -13,70 +13,165 @@ from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Generator, List, Mapping, MutableSet, Optional
+from typing import (
+    Any,
+    Dict,
+    FrozenSet,
+    Generator,
+    List,
+    Mapping,
+    MutableSet,
+    Optional,
+    Union,
+    TypeVar,
+)
 
 import toml
 from termcolor import colored
 
 
-def is_sequence(v: Any) -> bool:
-    return not isinstance(v, str) and isinstance(v, Sequence)
+@dataclass(frozen=True)
+class Unit:
+    cmd: str
+    uid: str
 
 
-def is_xprod(v: Any) -> bool:
-    if is_sequence(v):
-        return True
-    return False
+def _cpu_count() -> int:
+    count = os.cpu_count()
+    return count if count else 1
 
 
-def is_option_settings(opt: Any) -> bool:
+@dataclass(frozen=True)
+class Resources:
+    restart: bool = False
+    num_proc: int = field(default_factory=_cpu_count)
+    gpu_indices: Optional[List[str]] = None
+
+    name: str = field(init=False, default="resources")
+
+    def __post_init__(self):
+        if self.gpu_indices is not None and self.num_proc > len(self.gpu_indices):
+            raise ValueError(
+                "`resources.num_proc` should be smaller than then number of available GPUs"
+            )
+
+
+TomlLiteral = Union[int, float, str]
+TomlSequence = List[TomlLiteral]
+TomlValue = Union[TomlLiteral, TomlSequence]
+TomlDict = Dict[str, Any]
+
+
+def _is_option(opt: Dict) -> bool:
     if not isinstance(opt, dict):
         return False
     keys = set(opt.keys())
     return keys.issubset(["value", "type", "xprod"])
 
 
-def preprocess(opts: Dict) -> Dict:
-    opts_processed = deepcopy(opts)
-    for key, val in opts.items():
-        if is_option_settings(val):
-            value = val["value"]
-            value_type = val.get("type", None)
-            value_xprod = val.get("xprod", False)
+def _process_unit_option(opt: Dict) -> TomlValue:
+    value = opt["value"]
+    value_type = opt.get("type", None)
+    value_xprod = opt.get("xprod", True)
 
-            if value_type.lower() == "path":
-                value = [Path(v).resolve() for v in glob.glob(value)]
+    if value_type.lower() == "path":
+        value = [str(Path(v).resolve()) for v in glob.glob(value)]
 
-            if not value_xprod:
-                pass
-
-            opts_processed[key] = value
-    return opts_processed
+    # TODO(awav): do not ignore `value_xprod`
+    return value
 
 
-def gen_xprod(d: Dict) -> Generator:
-    keys = d.keys()
-    vals = d.values()
-    for instance in itertools.product(*vals):
-        yield dict(zip(keys, instance))
+@dataclass(frozen=True)
+class UnitSetup:
+    exp: Dict[str, TomlValue]
+    cmd: Optional[str] = None
+    uid: Optional[str] = None
+
+    def __post_init__(self):
+        if not isinstance(self.exp, dict):
+            raise ValueError("`exp` must be a dictionary")
+
+        for key, value in self.exp.items():
+            if not isinstance(value, dict):
+                continue
+
+            if not _is_option(value):
+                raise ValueError(f"`exp.{key}` has invalid attributes {value}")
+
+            self.exp[key] = _process_unit_option(value)
+
+    def gen_experiments(
+        self, global_cmd: Union[str, None], global_uid: Union[str, None]
+    ) -> Generator:
+        class missingdict(dict):
+            def __missing__(self, key):
+                return "{" + key + "}"
+
+        uid = self.uid.format_map(missingdict(uid=global_uid)) if self.uid else global_uid
+        cmd = self.cmd.format_map(missingdict(cmd=global_cmd)) if self.cmd else global_cmd
+
+        if cmd is None:
+            raise ValueError("Either `global_cmd` or local experiment `cmd` should be set")
+
+        if uid is None:
+            raise ValueError("Either `global_uid` or local experiment `uid` should be set")
+
+        def is_xprod(v: Any) -> bool:
+            if not isinstance(v, str) and isinstance(v, Sequence):
+                return True
+            return False
+
+        opts = self.exp.items()
+        linear = {k: v for k, v in opts if not is_xprod(v)}
+        xprod_dict = {k: v for k, v in opts if is_xprod(v)}
+        xprod_dict_keys = xprod_dict.keys()
+        xprod_dict_values = xprod_dict.values()
+        for xprod_values in itertools.product(*xprod_dict_values):
+            xprod = dict(zip(xprod_dict_keys, xprod_values))
+            uid_exp = uid.format(**linear, **xprod)
+            cmd_exp = cmd.format(uid=uid, **linear, **xprod)
+            yield Unit(cmd_exp, uid_exp)
 
 
-def opts_configurations(raw_cfg: Mapping) -> List[Dict]:
-    opts = preprocess(raw_cfg["opts"])
-    included = {k: v for k, v in opts.items() if is_xprod(v)}
-    excluded = {k: v for k, v in opts.items() if not is_xprod(v)}
-    opts_all = [{**excluded, **d} for d in gen_xprod(included)]
-    return opts_all
+@dataclass(frozen=True)
+class Config:
+    toml_config: InitVar[TomlDict]
 
+    global_cmd: str = field(init=False)
+    global_uid: str = field(init=False)
+    resources: Resources = field(init=False)
+    experiment_settings: List[UnitSetup] = field(init=False)
 
-def _norm_template(template: str) -> str:
-    pattern = r"{opts.([\w-]*)}"
-    replacement = r"{opts_\1}"
-    return re.sub(pattern, replacement, template)
+    def __post_init__(self, toml_config: TomlDict):
+        resources_args = toml_config[Resources.name]
+        resources = Resources(**resources_args)
+        super().__setattr__("resources", resources)
 
+        cmd = toml_config.get("cmd", None)
+        super().__setattr__("global_cmd", cmd)
 
-def _norm_opts(opts: Dict) -> Dict:
-    return {f"opts_{k}": v for k, v in opts.items()}
+        uid = toml_config.get("uid", None)
+        super().__setattr__("global_uid", uid)
+
+        experiments = toml_config["exp"]
+        if not isinstance(experiments, list):
+            experiments = [experiments]
+
+        experiment_settings = []
+        for e in experiments:
+            e_copy = e.copy()
+            local_cmd = e_copy.pop("cmd", None)
+            local_uid = e_copy.pop("uid", None)
+            u = UnitSetup(cmd=local_cmd, uid=local_uid, exp=e_copy)
+            experiment_settings.append(u)
+
+        super().__setattr__("experiment_settings", experiment_settings)
+
+    def gen_experiments(self) -> Generator:
+        cmd = self.global_cmd
+        uid = self.global_uid
+        for setting in self.experiment_settings:
+            yield from setting.gen_experiments(cmd, uid)
 
 
 def _quoted_split(string: str):
@@ -97,94 +192,69 @@ def _quoted_split(string: str):
     ]
 
 
-@dataclass(frozen=True)
-class RunConfig:
-    cmd_tmpl: str
-    uid_tmpl: str
-    options: List[Dict]
-    proc_num: int = 4
-    restart: bool = False
-    gpu_indices: Optional[FrozenSet[str]] = None
-
-
 @dataclass
 class RunContext:
-    lock: asyncio.Lock
-    config: InitVar[RunConfig]
+    config: InitVar[Config]
 
-    _restart: bool = field(init=False)
-    _uid_tmpl: str = field(init=False)
-    _cmd_tmpl: str = field(init=False)
-    _gpu_indices: Optional[FrozenSet[str]] = field(init=False, default=None)
-    _gpu_indices_shared: Optional[MutableSet[str]] = field(init=False, default=None)
+    lock: asyncio.Lock = field(init=False)
+    restart: bool = field(init=False)
+    gpu_indices: Optional[FrozenSet[str]] = field(init=False, default=None)
+    gpu_indices_shared: Optional[MutableSet[str]] = field(init=False, default=None)
 
-    def __post_init__(self, config: RunConfig):
-        self._restart = config.restart
-        self._uid_tmpl = _norm_template(config.uid_tmpl)
-        self._cmd_tmpl = _norm_template(config.cmd_tmpl)
-        if config.gpu_indices is not None:
-            indices = config.gpu_indices
-            self._gpu_indices = frozenset(deepcopy(indices))
-            self._gpu_indices_shared = set(deepcopy(indices))
+    def __post_init__(self, config: Config):
+        self.lock = asyncio.Lock()
+        resources = config.resources
+        self.restart = resources.restart
+        indices = resources.gpu_indices
+        if indices is not None:
+            self.gpu_indices = frozenset(deepcopy(indices))
+            self.gpu_indices_shared = set(deepcopy(indices))
 
-    def cmd(self, opts: Dict) -> str:
-        opts_norm = _norm_opts(opts)
-        uid = self.uid(opts)
-        cmd = self._cmd_tmpl.format(uid=uid, **opts_norm)
-        return cmd
+    def program_and_args(self, cmd: str) -> List[str]:
+        return _quoted_split(cmd)
 
-    def uid(self, opts: Dict) -> str:
-        opts_norm = _norm_opts(opts)
-        opts_values = sorted(list(map(str, opts_norm.values())))
-        to_hash = ".".join(opts_values)
-        md5 = hashlib.md5(to_hash.encode("utf-8")).hexdigest()
-        return self._uid_tmpl.format(hash_opts=md5, **opts_norm)
-
-    def program_and_args(self, opts: Dict) -> List[str]:
-        return _quoted_split(self.cmd(opts))
-
-    def output_log_file(self, opts: Dict) -> Path:
+    def output_log_file(self, uid: str) -> Path:
         timestamp = int(time.time())
-        return self._filepath(f"stdout.{timestamp}.log", opts)
+        return self._filepath(f"stdout.{timestamp}.log", uid)
 
-    def error_log_file(self, opts: Dict) -> Path:
+    def error_log_file(self, uid: str) -> Path:
         timestamp = int(time.time())
-        return self._filepath(f"stderr.{timestamp}.log", opts)
+        return self._filepath(f"stderr.{timestamp}.log", uid)
 
-    def completed_file(self, opts: Dict) -> Path:
-        return self._filepath("completed.status", opts)
+    def completed_file(self, uid: str) -> Path:
+        return self._filepath("completed.flag", uid)
 
-    def failed_file(self, opts: Dict) -> Path:
-        return self._filepath("failed.status", opts)
+    def failed_file(self, uid: str) -> Path:
+        return self._filepath("failed.flag", uid)
 
-    def _filepath(self, status: str, opts: Dict) -> Path:
-        base = Path(self.uid(opts))
+    def _filepath(self, status: str, uid: str) -> Path:
+        base = Path(uid)
         if not base.exists():
             base.mkdir(parents=True)
         return Path(base, status).resolve()
 
-    def is_task_completed(self, opts: Dict) -> bool:
-        if self._restart:
+    def is_task_completed(self, uid: str) -> bool:
+        if self.restart:
             return False
-        return self.completed_file(opts).exists()
+        return self.completed_file(uid).exists()
 
-    async def pop_gpu_indices(self):
-        if self._gpu_indices is not None:
+    async def pop_gpu_indices(self) -> str:
+        if self.gpu_indices is not None:
             async with self.lock:
-                if len(self._gpu_indices_shared) == 0:
+                if len(self.gpu_indices_shared) == 0:
                     raise RuntimeError(
-                        f"GPU indices set is empty." f"Original set: {self._gpu_indices}"
+                        f"GPU indices set is empty." f"Original set: {self.gpu_indices}"
                     )
-                return self._gpu_indices_shared.pop()
+                return self.gpu_indices_shared.pop()
 
-    async def put_gpu_indices(self, value: Optional[str]):
-        if self._gpu_indices is not None:
+    async def put_gpu_indices(self, value: str):
+        if self.gpu_indices is not None:
             async with self.lock:
-                if value not in self._gpu_indices:
+                if value not in self.gpu_indices:
                     raise RuntimeError(
-                        f"GPU index {value} is not among " f"GPU indices set {self._gpu_indices}"
+                        f"GPU index {value} is not among " f"GPU indices set {self.gpu_indices}"
                     )
-                self._gpu_indices_shared.add(value)
+                self.gpu_indices_shared.add(value)
 
 
 @dataclass(frozen=True)
@@ -192,27 +262,12 @@ class RunResult:
     process: Optional[asyncio.subprocess.Process] = None
 
 
-def _cli_name() -> str:
-    return "xpert"
-
-
-def _default_uid() -> str:
-    return f"{_cli_name()}.logs/{{hash_opts}}"
-
-
 def parse_toml(filepath: str):
     fp = Path(filepath).expanduser().resolve()
     if not fp.exists():
         raise RuntimeError(f"File {fp} does not exist")
-    raw_cfg: Mapping = toml.load(fp)
-    opts = opts_configurations(raw_cfg)
-    cmd_tmpl = raw_cfg["cmd"]
-    uid_tmpl = str(raw_cfg.get("uid", _default_uid()))
-    proc_cfg = raw_cfg.get("proc", dict())
-    gpu_cfg = proc_cfg.get("gpu", dict())
-    proc_num = proc_cfg.get("num", RunConfig.proc_num)
-    gpu_indices = gpu_cfg.get("indices", RunConfig.gpu_indices)
-    return RunConfig(cmd_tmpl, uid_tmpl, opts, proc_num=proc_num, gpu_indices=gpu_indices)
+    toml_dict: Mapping = toml.load(fp)
+    return Config(toml_dict)
 
 
 @dataclass
@@ -247,9 +302,10 @@ class StatusPrinter:
         return colored(f"[PID:{pid_str}]", "grey")
 
 
-async def run_command(ctx: RunContext, opts: Dict):
-    sp = StatusPrinter(ctx.cmd(opts))
-    if ctx.is_task_completed(opts):
+async def run_command(ctx: RunContext, exp: Unit):
+    sp = StatusPrinter(exp.cmd)
+    uid = exp.uid
+    if ctx.is_task_completed(uid):
         sp.print_skip()
         return RunResult()
 
@@ -263,7 +319,7 @@ async def run_command(ctx: RunContext, opts: Dict):
     read_pipe, write_pipe = os.pipe()
     read_err_pipe, write_err_pipe = os.pipe()
 
-    program, *args = ctx.program_and_args(opts)
+    program, *args = ctx.program_and_args(exp.cmd)
     process = await asyncio.create_subprocess_exec(
         program,
         *args,
@@ -276,10 +332,10 @@ async def run_command(ctx: RunContext, opts: Dict):
     os.close(write_err_pipe)
 
     tee_out = await asyncio.create_subprocess_exec(
-        "tee", "-a", ctx.output_log_file(opts), stdin=read_pipe, stdout=stdout_pipe
+        "tee", "-a", ctx.output_log_file(uid), stdin=read_pipe, stdout=stdout_pipe
     )
     tee_err = await asyncio.create_subprocess_exec(
-        "tee", "-a", ctx.error_log_file(opts), stdin=read_err_pipe, stdout=stdout_pipe
+        "tee", "-a", ctx.error_log_file(uid), stdin=read_err_pipe, stdout=stdout_pipe
     )
 
     os.close(read_pipe)
@@ -296,7 +352,7 @@ async def run_command(ctx: RunContext, opts: Dict):
         sp.print_failure(pid)
     else:
         sp.print_success(pid)
-        completed_file = ctx.completed_file(opts)
+        completed_file = ctx.completed_file(uid)
         # Blocking operations
         completed_file.parent.mkdir(parents=True, exist_ok=True)
         completed_file.touch()
@@ -305,19 +361,19 @@ async def run_command(ctx: RunContext, opts: Dict):
     return RunResult(process)
 
 
-async def run(config: RunConfig):
-    max_concurrency = config.proc_num
+async def run(config: Config):
+    max_concurrency: int = config.resources.num_proc
     semaphore = asyncio.BoundedSemaphore(max_concurrency)
-    ctx = RunContext(asyncio.Lock(), config)
+    context = RunContext(config)
 
-    async def with_semaphore(ctx, opts):
+    async def with_semaphore(ctx, exp):
         async with semaphore:
-            res = await run_command(ctx, opts)
+            res = await run_command(ctx, exp)
             return res
 
     tasks = []
-    for opts in config.options:
-        task = asyncio.create_task(with_semaphore(ctx, opts))
+    for experiment_unit in config.gen_experiments():
+        task = asyncio.create_task(with_semaphore(context, experiment_unit))
         tasks.append(task)
 
     return await asyncio.gather(*tasks, return_exceptions=True)

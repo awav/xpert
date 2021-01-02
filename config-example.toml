@@ -1,12 +1,17 @@
-cmd = "python -c '{opts.cmd}; print({opts.index})' &| tee -a {uid}/output.log"
-uid = "xpert.logs/{opts.index}"
-
-[opts]
 cmd = 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4)); print(os.environ.get("CUDA_VISIBLE_DEVICES", "NOTFOUND"))'
-index = [0, 1, 2, 3]
+uid = "xpert.logs/{index}"
 
-[proc]
-num = 2
+[[exp]]
+cmd = "python -c '{cmd}; print(\"{index}\", \"{name}\")'"
+name = "group.1"
+index = [0, 1]
 
-[proc.gpu]
-indices = ["1", "2,4"]
+[[exp]]
+cmd = "python -c '{cmd}; print({index}, {name})'"
+name = '"group.2"'
+index = [10, 20, 30, 40]
+
+[resources]
+restart = true
+num_proc = 2
+gpu_indices = ["1", "2,4"]
