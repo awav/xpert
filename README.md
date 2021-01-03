@@ -44,10 +44,10 @@ When you run the script you will get:
 
 ```
 →  python xpert.py config-example.toml
-[PID:16800] [RUN] python -c 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4)); print(os.environ.get("CUDA_VISIBLE_DEVICES", "NOTFOUND")); print("0", "group.1")'
-[PID:16801] [RUN] python -c 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4)); print(os.environ.get("CUDA_VISIBLE_DEVICES", "NOTFOUND")); print("1", "group.1")'
-[PID:16801] [SUCCESS] python -c 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4)); print(os.environ.get("CUDA_VISIBLE_DEVICES", "NOTFOUND")); print("1", "group.1")'
-
+[PID:28569] [RUN] python -c 'print("job-0", "group-group.1"); import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4));'
+[PID:28570] [RUN] python -c 'print("job-1", "group-group.1"); import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4));'
+[PID:28570] [SUCCESS] python -c 'print("job-1", "group-group.1"); import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4));'
+[PID:28591] [RUN] python -c 'print("job-10", "group-group.2"); import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4));'
 ...
 
 Job is done!
