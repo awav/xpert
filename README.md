@@ -6,7 +6,7 @@ Simple experiment runner tool:
 * Running jobs in parallel
 * Redirecting `stdout` and `stderr` into a separate files
 * Tracking job completion
-* Limiting resources: specifying GPU indices and number of processes
+* Imposing restrictions: specifying GPU indexes or a number of parallel processes
 
 In the following TOML configuration example we run `python -c ...` command in :
 
