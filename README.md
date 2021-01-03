@@ -13,22 +13,30 @@ In the following TOML configuration example we run `python -c ...` command in :
 
 ```toml
 cmd = 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4));'
-uid = "xpert.logs/{index}"  # "{KEY}" is a formatting syntax. KEY will be replaced with an option from an experiment setup
+uid = "xpert.logs/{index}"  # Additional option for uniquely identifying experiments
+                            # It can be used as a unique directory for experiment
+                            # outputs.
+                            # 
+                            # "{key}" is a formatting syntax.
+                            # The "key" will be replaced with a field from
+                            # an experiment setup
 
-[[exp]]  # First group of experiments
+[[exp]]  # Setup for a first group of experiments
 cmd = "python -c 'print(\"job-{index}\", \"group-{name}\"); {cmd}'"
-name = "group.1"  # Literal
-index = [0, 1]  # List specifies cross-product points for experiment generation
+name = "group.1"  # String literal
+index = [0, 1]  # The list specifies cross-product points for experiment generation.
+                # The cross-product generation acts only on a local experiment group.
 
-[[exp]]  # Second group of experiments
+[[exp]]  # Setup for a second group of experiments
 cmd = "python -c 'print(\"job-{index}\", \"group-{name}\"); {cmd}'"
-name = '"group.2"'
+uid = "{uid}/subgroup-{name}"  # Local definition of the UID
+name = 'group.2'
 index = [10, 20]
 
 [flags]
-restart = false
-num_proc = 2
-gpu_indices = ["1", "2,4"]
+restart = false             # Restart experiments
+num_proc = 2                # Limit number of parallel processes to 2
+gpu_indices = ["1", "2,4"]  # List of GPU indexes passed to CUDA_VISIBLE_DEVICES environment variable
 
 ```
 

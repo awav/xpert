@@ -20,14 +20,12 @@ from typing import (
     Dict,
     FrozenSet,
     Generator,
-    Iterator,
     List,
     Mapping,
     MutableSet,
     Optional,
     Sequence,
     Union,
-    TypeVar,
 )
 
 import toml
@@ -412,7 +410,7 @@ def _print_final_msg(results):
     succeded = colored(f"Successfully completed {count_fn(ok)}", "green")
     failed = colored(f"Failed {count_fn(failed)}", "red")
     skipped = colored(f"Skipped {count_fn(skipped)}", "grey", attrs=["dark"])
-    print(f"\r\n{header}\r\n{succeded}\r\n{failed}\r\n{skipped}\r\n")
+    print(f"\r\n{header}\r\n{succeded}\r\n{failed}\r\n{skipped}")
 
 
 def _getstatus(results: Sequence[RunResult], status: RunStatus) -> Sequence[RunResult]:
