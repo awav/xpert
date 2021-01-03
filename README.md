@@ -32,4 +32,27 @@ gpu_indices = ["1", "2,4"]
 
 ```
 
+When you run the script you will get:
 
+```
+→  python xpert.py config-example.toml
+[PID:16800] [RUN] python -c 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4)); print(os.environ.get("CUDA_VISIBLE_DEVICES", "NOTFOUND")); print("0", "group.1")'
+[PID:16801] [RUN] python -c 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4)); print(os.environ.get("CUDA_VISIBLE_DEVICES", "NOTFOUND")); print("1", "group.1")'
+[PID:16801] [SUCCESS] python -c 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4)); print(os.environ.get("CUDA_VISIBLE_DEVICES", "NOTFOUND")); print("1", "group.1")'
+
+...
+
+Job is done!
+Successfully completed [6/6]
+Failed [0/6]
+Skipped [0/6]
+```
+
+And the output directory will contain:
+
+```
+→ ls xpert.logs/1/
+completed.flag
+stdout.1609672971.log
+stderr.1609672971.log
+```
