@@ -25,7 +25,7 @@ cmd = "python -c 'print(\"job-{index}\", \"group-{name}\"); {cmd}'"
 name = '"group.2"'
 index = [10, 20]
 
-[resources]
+[flags]
 restart = false
 num_proc = 2
 gpu_indices = ["1", "2,4"]

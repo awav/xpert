@@ -46,17 +46,17 @@ def _cpu_count() -> int:
 
 
 @dataclass(frozen=True)
-class Resources:
+class Flags:
     restart: bool = False
     num_proc: int = field(default_factory=_cpu_count)
     gpu_indices: Optional[List[str]] = None
 
-    name: str = field(init=False, default="resources")
+    name: str = field(init=False, default="flags")
 
     def __post_init__(self):
         if self.gpu_indices is not None and self.num_proc > len(self.gpu_indices):
             raise ValueError(
-                "`resources.num_proc` should be smaller than then number of available GPUs"
+                "`flags.num_proc` should be smaller than then number of available GPUs"
             )
 
 
@@ -143,13 +143,13 @@ class Config:
 
     global_cmd: str = field(init=False)
     global_uid: str = field(init=False)
-    resources: Resources = field(init=False)
+    flags: Flags = field(init=False)
     experiment_settings: List[UnitSetup] = field(init=False)
 
     def __post_init__(self, toml_config: TomlDict):
-        resources_args = toml_config[Resources.name]
-        resources = Resources(**resources_args)
-        super().__setattr__("resources", resources)
+        flags_args = toml_config[Flags.name]
+        flags = Flags(**flags_args)
+        super().__setattr__("flags", flags)
 
         cmd = toml_config.get("cmd", None)
         super().__setattr__("global_cmd", cmd)
@@ -207,9 +207,9 @@ class RunContext:
 
     def __post_init__(self, config: Config):
         self.lock = asyncio.Lock()
-        resources = config.resources
-        self.restart = resources.restart
-        indices = resources.gpu_indices
+        flags = config.flags
+        self.restart = flags.restart
+        indices = flags.gpu_indices
         if indices is not None:
             self.gpu_indices = frozenset(deepcopy(indices))
             self.gpu_indices_shared = set(deepcopy(indices))
@@ -375,7 +375,7 @@ async def run_command(ctx: RunContext, exp: Unit):
 
 
 async def run(config: Config) -> Sequence[RunResult]:
-    max_concurrency: int = config.resources.num_proc
+    max_concurrency: int = config.flags.num_proc
     semaphore = asyncio.BoundedSemaphore(max_concurrency)
     context = RunContext(config)
 
