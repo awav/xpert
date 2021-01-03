@@ -8,8 +8,7 @@ Simple experiment runner tool:
 * Tracking job completion
 * Imposing restrictions: specifying GPU indexes or a number of parallel processes
 
-In the following TOML configuration example we run `python -c ...` command in :
-
+In the following TOML configuration example we run `python -c ...` command:
 
 ```toml
 cmd = 'import tensorflow as tf; import os; print(tf.random.normal([4, 4]) + tf.eye(4));'
