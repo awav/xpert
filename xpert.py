@@ -9,19 +9,23 @@ import itertools
 import os
 import re
 import time
-from collections.abc import Sequence
+
+# from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
+from enum import Enum, auto
 from typing import (
     Any,
     Dict,
     FrozenSet,
     Generator,
+    Iterator,
     List,
     Mapping,
     MutableSet,
     Optional,
+    Sequence,
     Union,
     TypeVar,
 )
@@ -257,8 +261,15 @@ class RunContext:
                 self.gpu_indices_shared.add(value)
 
 
+class RunStatus(Enum):
+    OK = auto()
+    FAILED = auto()
+    SKIPPED = auto()
+
+
 @dataclass(frozen=True)
 class RunResult:
+    status: RunStatus
     process: Optional[asyncio.subprocess.Process] = None
 
 
@@ -307,7 +318,7 @@ async def run_command(ctx: RunContext, exp: Unit):
     uid = exp.uid
     if ctx.is_task_completed(uid):
         sp.print_skip()
-        return RunResult()
+        return RunResult(RunStatus.SKIPPED, None)
 
     gpu_indices = await ctx.pop_gpu_indices()
     env = deepcopy(os.environ)
@@ -350,18 +361,20 @@ async def run_command(ctx: RunContext, exp: Unit):
 
     if process.returncode != 0:
         sp.print_failure(pid)
+        status = RunStatus.FAILED
     else:
         sp.print_success(pid)
         completed_file = ctx.completed_file(uid)
         # Blocking operations
         completed_file.parent.mkdir(parents=True, exist_ok=True)
         completed_file.touch()
+        status = RunStatus.OK
 
     await ctx.put_gpu_indices(gpu_indices)
-    return RunResult(process)
+    return RunResult(status, process)
 
 
-async def run(config: Config):
+async def run(config: Config) -> Sequence[RunResult]:
     max_concurrency: int = config.resources.num_proc
     semaphore = asyncio.BoundedSemaphore(max_concurrency)
     context = RunContext(config)
@@ -383,10 +396,28 @@ def exec_toml_config(toml_filepath: str):
     config = parse_toml(toml_filepath)
     loop = asyncio.get_event_loop()
     try:
-        result = loop.run_until_complete(run(config))
+        results = loop.run_until_complete(run(config))
+        _print_final_msg(results)
     finally:
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
+
+
+def _print_final_msg(results):
+    ok = _getstatus(results, RunStatus.OK)
+    failed = _getstatus(results, RunStatus.FAILED)
+    skipped = _getstatus(results, RunStatus.SKIPPED)
+    count_fn = lambda x: f"[{len(x)}/{len(results)}]"
+    header = colored(f"Job is done!", "grey", attrs=["bold"])
+    succeded = colored(f"Successfully completed {count_fn(ok)}", "green")
+    failed = colored(f"Failed {count_fn(failed)}", "red")
+    skipped = colored(f"Skipped {count_fn(skipped)}", "grey", attrs=["dark"])
+    print(f"\r\n{header}\r\n{succeded}\r\n{failed}\r\n{skipped}\r\n")
+
+
+def _getstatus(results: Sequence[RunResult], status: RunStatus) -> Sequence[RunResult]:
+    filtered = filter(lambda x: x.status == status, results)
+    return list(filtered)
 
 
 @click.command()

@@ -12,6 +12,6 @@ name = '"group.2"'
 index = [10, 20, 30, 40]
 
 [resources]
-restart = true
+restart = false
 num_proc = 2
 gpu_indices = ["1", "2,4"]
