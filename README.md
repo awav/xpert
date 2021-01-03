@@ -35,7 +35,7 @@ index = [10, 20]
 
 [flags]
 restart = false             # Restart completed experiments
-num_proc = 2                # Limit number of parallel processes to 2
+num_proc = 2                # Limit the number of parallel processes to 2
 gpu_indices = ["1", "2,4"]  # List of GPU indexes passed to CUDA_VISIBLE_DEVICES environment variable
 
 ```
