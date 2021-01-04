@@ -21,14 +21,14 @@ uid = "xpert.logs/{index}"  # Additional option for uniquely identifying experim
                             # an experiment setup
 
 [[exp]]  # Setup for a first group of experiments
-cmd = "python -c 'print(\"job-{index}\", \"group-{name}\"); {cmd}'"
+cmd = "python -c 'print(\"job-{index}\", \"group-{name}\"); {cmd}'"  # You can re-use global CMD in local definitions
 name = "group.1"  # String literal
 index = [0, 1]  # The list specifies cross-product points for experiment generation.
                 # The cross-product generation acts only on a local experiment group.
 
 [[exp]]  # Setup for a second group of experiments
 cmd = "python -c 'print(\"job-{index}\", \"group-{name}\"); {cmd}'"
-uid = "{uid}/subgroup-{name}"  # Local definition of the UID
+uid = "{uid}/subgroup-{name}"  # Local definition of UID using the global UID
 name = 'group.2'
 index = [10, 20]
 
