@@ -26,6 +26,7 @@ from typing import (
     Optional,
     Sequence,
     Union,
+    Tuple,
 )
 
 import toml
@@ -77,7 +78,7 @@ def _process_unit_option(opt: Dict) -> TomlValue:
     value_xprod = opt.get("xprod", True)
 
     if value_type.lower() == "path":
-        value = [str(Path(v).resolve()) for v in glob.glob(value)]
+        value = [str(Path(v).expanduser().resolve()) for v in glob.glob(value)]
 
     # TODO(awav): do not ignore `value_xprod`
     return value
@@ -109,8 +110,12 @@ class UnitSetup:
             def __missing__(self, key):
                 return "{" + key + "}"
 
-        uid = self.uid.format_map(missingdict(uid=global_uid)) if self.uid else global_uid
-        cmd = self.cmd.format_map(missingdict(cmd=global_cmd)) if self.cmd else global_cmd
+        uid = (
+            self.uid.format_map(missingdict(uid=global_uid)) if self.uid is not None else global_uid
+        )
+        cmd = (
+            self.cmd.format_map(missingdict(cmd=global_cmd)) if self.cmd is not None else global_cmd
+        )
 
         if cmd is None:
             raise ValueError("Either `global_cmd` or local experiment `cmd` should be set")
@@ -131,7 +136,7 @@ class UnitSetup:
         for xprod_values in itertools.product(*xprod_dict_values):
             xprod = dict(zip(xprod_dict_keys, xprod_values))
             uid_exp = uid.format(**linear, **xprod)
-            cmd_exp = cmd.format(uid=uid, **linear, **xprod)
+            cmd_exp = cmd.format(uid=uid_exp, **linear, **xprod)
             yield Unit(cmd_exp, uid_exp)
 
 
@@ -233,7 +238,7 @@ class RunContext:
         base = Path(uid)
         if not base.exists():
             base.mkdir(parents=True)
-        return Path(base, status).resolve()
+        return Path(base, status).expanduser().resolve()
 
     def is_task_completed(self, uid: str) -> bool:
         if self.restart:
@@ -340,11 +345,14 @@ async def run_command(ctx: RunContext, exp: Unit):
     os.close(write_pipe)
     os.close(write_err_pipe)
 
+    stdout_file = str(ctx.output_log_file(uid))
+    stderr_file = str(ctx.error_log_file(uid))
+
     tee_out = await asyncio.create_subprocess_exec(
-        "tee", "-a", ctx.output_log_file(uid), stdin=read_pipe, stdout=stdout_pipe
+        "tee", "-a", stdout_file, stdin=read_pipe, stdout=stdout_pipe
     )
     tee_err = await asyncio.create_subprocess_exec(
-        "tee", "-a", ctx.error_log_file(uid), stdin=read_err_pipe, stdout=stdout_pipe
+        "tee", "-a", stderr_file, stdin=read_err_pipe, stdout=stdout_pipe
     )
 
     os.close(read_pipe)
@@ -402,9 +410,11 @@ def exec_toml_config(toml_filepath: str):
 
 
 def _print_final_msg(results):
+    exceptions, run_results = _filter_out_exceptions(results)
     ok = _getstatus(results, RunStatus.OK)
     failed = _getstatus(results, RunStatus.FAILED)
     skipped = _getstatus(results, RunStatus.SKIPPED)
+
     count_fn = lambda x: f"[{len(x)}/{len(results)}]"
     header = colored(f"Job is done!", "grey", attrs=["bold"])
     succeded = colored(f"Successfully completed {count_fn(ok)}", "green")
@@ -412,9 +422,35 @@ def _print_final_msg(results):
     skipped = colored(f"Skipped {count_fn(skipped)}", "grey", attrs=["dark"])
     print(f"\r\n{header}\r\n{succeded}\r\n{failed}\r\n{skipped}")
 
+    if exceptions:
+        for e in exceptions:
+            err_msg = colored(str(e), "red")
+            print(err_msg)
 
-def _getstatus(results: Sequence[RunResult], status: RunStatus) -> Sequence[RunResult]:
-    filtered = filter(lambda x: x.status == status, results)
+
+MaybeRunResult = Union[Exception, RunResult]
+
+
+def _filter_out_exceptions(
+    results: Sequence[MaybeRunResult],
+) -> Tuple[Sequence[Exception], Sequence[RunResult]]:
+    exceptions = []
+    run_results = []
+    for r in results:
+        if isinstance(r, Exception):
+            exceptions.append(r)
+        else:
+            run_results.append(r)
+    return exceptions, run_results
+
+
+def _getstatus(results: Sequence[MaybeRunResult], status: RunStatus) -> Sequence[MaybeRunResult]:
+    def eq_status(x: MaybeRunResult) -> bool:
+        if isinstance(x, Exception):
+            return status == RunStatus.FAILED
+        return x.status == status
+
+    filtered = filter(lambda x: eq_status(x), results)
     return list(filtered)
 
 
