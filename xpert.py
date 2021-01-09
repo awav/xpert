@@ -1,6 +1,7 @@
 # Copyright 2020 by Artem Artemev, @awav.
 # All rights reserved.
 
+import signal
 import click
 import hashlib
 import asyncio
@@ -398,15 +399,30 @@ async def run(config: Config) -> Sequence[RunResult]:
     return await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def exec_toml_config(toml_filepath: str):
-    config = parse_toml(toml_filepath)
-    loop = asyncio.get_event_loop()
-    try:
-        results = loop.run_until_complete(run(config))
-        _print_final_msg(results)
-    finally:
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
+@dataclass
+class Runner:
+    loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_event_loop)
+
+    def __post_init__(self):
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+
+    def execute(self, toml_filepath: str):
+        config = parse_toml(toml_filepath)
+        try:
+            tasks = run(config)
+            results = self.loop.run_until_complete(tasks)
+            _print_final_msg(results)
+        finally:
+            self.shutdown()
+
+    def shutdown(self):
+        gens = self.loop.shutdown_asyncgens()
+        self.loop.run_until_complete(gens)
+        self.loop.close()
+
+    def signal_handler(self, signum, frame):
+        self.shutdown()
 
 
 def _print_final_msg(results):
@@ -457,7 +473,7 @@ def _getstatus(results: Sequence[MaybeRunResult], status: RunStatus) -> Sequence
 @click.command()
 @click.argument("config-filepath", type=click.Path(exists=True))
 def main(config_filepath: str):
-    exec_toml_config(config_filepath)
+    Runner().execute(config_filepath)
 
 
 if __name__ == "__main__":
