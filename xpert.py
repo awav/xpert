@@ -111,11 +111,13 @@ class UnitSetup:
             def __missing__(self, key):
                 return "{" + key + "}"
 
+        missing_uid = missingdict(uid=global_uid)
         uid = (
-            self.uid.format_map(missingdict(uid=global_uid)) if self.uid is not None else global_uid
+            self.uid.format_map(missing_uid) if self.uid is not None else global_uid
         )
+        missing_cmd = missingdict(cmd=global_cmd)
         cmd = (
-            self.cmd.format_map(missingdict(cmd=global_cmd)) if self.cmd is not None else global_cmd
+            self.cmd.format_map(missing_cmd) if self.cmd is not None else global_cmd
         )
 
         if cmd is None:
